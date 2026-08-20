@@ -1,0 +1,12 @@
+{
+    "id": "{AA307958-F2C7-4F4A-BA01-347D6D2BC74F}",
+    "name": "Weather Dashboard",
+    "type": 3,
+    "vendor": "Martin Wilkens",
+    "aliases": [],
+    "dependencies": [],
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "WXD"
+}

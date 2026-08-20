@@ -1,0 +1,72 @@
+{
+  "elements": [
+    {
+      "type": "NumberSpinner",
+      "name": "update_interval",
+      "caption": "Aktualisierungsintervall (Sekunden)",
+      "minimum": 30,
+      "suffix": "s"
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Aktuelle Werte (Wetterstation)",
+      "expanded": true,
+      "items": [
+        { "type": "SelectVariable", "name": "var_temp",           "caption": "Temperatur",              "validVariableTypes": [2] },
+        { "type": "SelectVariable", "name": "var_humidity",       "caption": "Luftfeuchtigkeit",         "validVariableTypes": [1, 2] },
+        { "type": "SelectVariable", "name": "var_wind_speed",     "caption": "Windgeschwindigkeit",      "validVariableTypes": [1, 2] },
+        { "type": "SelectVariable", "name": "var_wind_dir",       "caption": "Windrichtung (Grad)",      "validVariableTypes": [1, 2] },
+        { "type": "SelectVariable", "name": "var_illumination",   "caption": "Helligkeit (Lux)",         "validVariableTypes": [1, 2] },
+        { "type": "SelectVariable", "name": "var_rain_now",       "caption": "Regnet es gerade",         "validVariableTypes": [0] },
+        { "type": "SelectVariable", "name": "var_sun_now",        "caption": "Sonne gerade aktiv",       "validVariableTypes": [0] },
+        { "type": "SelectVariable", "name": "var_sunshine_today", "caption": "Sonnenschein heute (min)", "validVariableTypes": [1, 2] },
+        { "type": "SelectVariable", "name": "var_rain_today",     "caption": "Regen heute (mm)",         "validVariableTypes": [1, 2] }
+      ]
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Unwetterwarnung",
+      "expanded": true,
+      "items": [
+        {
+          "type": "SelectInstance",
+          "name": "warning_instance",
+          "caption": "Unwetterwarnung-Instanz (Weather Warning Modul)",
+          "validModules": ["{DCDBF64A-F2DC-B23B-2483-69BCAFFE091A}"]
+        }
+      ]
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Wettervorhersage",
+      "expanded": true,
+      "items": [
+        {
+          "type": "SelectInstance",
+          "name": "forecast_instance",
+          "caption": "Vorhersage-Instanz (WundergroundPWSSync Modul)",
+          "validModules": ["{89BE464A-89B6-4192-A1B9-4EF0178FBEAC}"]
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "forecast_segments",
+          "caption": "Anzahl Vorhersage-Segmente (je 12h)",
+          "minimum": 1,
+          "maximum": 6
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "Button",
+      "caption": "Jetzt aktualisieren",
+      "onClick": "WXD_Refresh($id);"
+    }
+  ],
+  "status": [
+    { "code": 102, "icon": "active",   "caption": "Aktiv" },
+    { "code": 200, "icon": "error",    "caption": "Fehler – Details im IPS-Log" },
+    { "code": 201, "icon": "inactive", "caption": "Nicht konfiguriert – Variablen in den Einstellungen auswaehlen" }
+  ]
+}
