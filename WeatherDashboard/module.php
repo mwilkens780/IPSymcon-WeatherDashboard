@@ -49,6 +49,12 @@ class WeatherDashboard extends IPSModule
         $this->RegisterPropertyInteger('forecast_instance', 57338); // Weather.com (WundergroundPWSSync)
         $this->RegisterPropertyInteger('forecast_segments', 6);
 
+        $this->RegisterPropertyInteger('archive_instance', 59233); // Archive Control
+        $this->RegisterPropertyInteger('pollen_instance',  52629); // Pollenflug (Pollen Count)
+
+        $this->RegisterPropertyFloat('latitude',  53.7189);
+        $this->RegisterPropertyFloat('longitude', 10.0046);
+
         $this->RegisterTimer('UpdateTimer', 0, 'WXD_Refresh($_IPS[\'TARGET\']);');
 
         // HTML-SDK dashboard tile
@@ -175,6 +181,93 @@ class WeatherDashboard extends IPSModule
         return self::ICON_LABELS[$code] ?? '–';
     }
 
+    /** Today's sunrise/sunset as HH:MM, computed astronomically (no external dependency). */
+    private function sunTimes(): array
+    {
+        $lat = $this->ReadPropertyFloat('latitude');
+        $lon = $this->ReadPropertyFloat('longitude');
+        $info = date_sun_info(time(), $lat, $lon);
+        $fmt = static function ($ts) {
+            return is_int($ts) ? date('H:i', $ts) : '–';
+        };
+        return [
+            'sunrise' => $fmt($info['sunrise']),
+            'sunset'  => $fmt($info['sunset']),
+        ];
+    }
+
+    private function pollenText(): ?string
+    {
+        $instanceID = $this->ReadPropertyInteger('pollen_instance');
+        if ($instanceID <= 0) {
+            return null;
+        }
+        $id = @IPS_GetObjectIDByIdent('Hint', $instanceID);
+        if ($id === false) {
+            return null;
+        }
+        $text = trim((string) GetValue($id));
+        return $text !== '' ? $text : null;
+    }
+
+    /**
+     * Last 24h of raw archived temperature readings as [[unixTimestamp, value], ...],
+     * oldest first, for the SVG sparkline. Empty if the variable isn't archived.
+     */
+    private function temperatureHistory(): array
+    {
+        $archiveID = $this->ReadPropertyInteger('archive_instance');
+        $tempID    = $this->ReadPropertyInteger('var_temp');
+        if ($archiveID <= 0 || $tempID <= 0 || !function_exists('AC_GetLoggedValues')) {
+            return [];
+        }
+
+        $now = time();
+        try {
+            $rows = @AC_GetLoggedValues($archiveID, $tempID, $now - 86400, $now, 0);
+        } catch (\Throwable $e) {
+            return [];
+        }
+        if (!is_array($rows) || empty($rows)) {
+            return [];
+        }
+
+        $points = [];
+        foreach (array_reverse($rows) as $row) { // AC_GetLoggedValues returns newest-first
+            $points[] = [(int) $row['TimeStamp'], (float) $row['Value']];
+        }
+        return $points;
+    }
+
+    /** SVG polyline "points" attribute value for a 24h temperature history, scaled to fit. */
+    private function tempChartPoints(array $history, float $viewW = 300.0, float $viewH = 70.0): string
+    {
+        if (count($history) < 2) {
+            return '';
+        }
+
+        $startTs = time() - 86400;
+        $values  = array_column($history, 1);
+        $min     = min($values);
+        $max     = max($values);
+        if ($max - $min < 1.0) {
+            $mid = ($max + $min) / 2;
+            $min = $mid - 0.5;
+            $max = $mid + 0.5;
+        }
+        $pad = ($max - $min) * 0.1;
+        $min -= $pad;
+        $max += $pad;
+
+        $pts = [];
+        foreach ($history as [$ts, $val]) {
+            $x = max(0, min($viewW, ($ts - $startTs) / 86400 * $viewW));
+            $y = $viewH - (($val - $min) / ($max - $min)) * $viewH;
+            $pts[] = round($x, 1) . ',' . round($y, 1);
+        }
+        return implode(' ', $pts);
+    }
+
     /**
      * Gathers every value the tile needs into one flat array — used both for
      * the initial PHP render and as the payload pushed to already-open tiles,
@@ -186,22 +279,37 @@ class WeatherDashboard extends IPSModule
         $forecastInstance = $this->ReadPropertyInteger('forecast_instance');
         $segments         = max(1, min(6, $this->ReadPropertyInteger('forecast_segments')));
 
-        $forecast = [];
-        for ($i = 0; $i < $segments; $i++) {
-            $icon = $this->readForeign($forecastInstance, "DP{$i}Icon");
-            $temp = $this->readForeign($forecastInstance, "DP{$i}Temperature");
-            $forecast[] = [
-                'icon'  => $icon !== null ? (int) $icon : null,
-                'temp'  => $temp !== null ? (float) $temp : null,
-                'label' => $this->iconLabel($icon !== null ? (int) $icon : null),
-                'time'  => date('D H:i', time() + $i * 12 * 3600),
-            ];
+        // Group the 12h day/night segments the forecast API provides into one
+        // card per calendar day, with two labeled halves ("Vormittag"/"Nachmittag")
+        // instead of a flat strip of disconnected-looking icons.
+        $days = [];
+        for ($i = 0; $i < $segments; $i += 2) {
+            $dayIndex = intdiv($i, 2);
+            $dayLabel = $dayIndex === 0 ? 'Heute' : ($dayIndex === 1 ? 'Morgen' : date('D, d.m.', time() + $dayIndex * 86400));
+
+            $halves = [];
+            foreach ([$i => 'Vormittag', $i + 1 => 'Nachmittag'] as $seg => $halfLabel) {
+                if ($seg >= $segments) {
+                    continue;
+                }
+                $icon = $this->readForeign($forecastInstance, "DP{$seg}Icon");
+                $temp = $this->readForeign($forecastInstance, "DP{$seg}Temperature");
+                $halves[] = [
+                    'label' => $halfLabel,
+                    'icon'  => $icon !== null ? (int) $icon : null,
+                    'temp'  => $temp !== null ? (float) $temp : null,
+                    'desc'  => $this->iconLabel($icon !== null ? (int) $icon : null),
+                ];
+            }
+
+            $days[] = ['label' => $dayLabel, 'halves' => $halves];
         }
 
         $warnLevel = $this->readForeign($warningInstance, 'Level');
         $warnText  = $this->readForeign($warningInstance, 'Text');
         $warnTable = $this->readForeign($warningInstance, 'Table');
         $radarHtml = $this->readForeign($warningInstance, 'MovRadar');
+        $sun       = $this->sunTimes();
 
         return [
             'temp'          => $this->readVar('var_temp'),
@@ -213,11 +321,15 @@ class WeatherDashboard extends IPSModule
             'sunNow'        => $this->readVar('var_sun_now'),
             'sunshineToday' => $this->readVar('var_sunshine_today'),
             'rainToday'     => $this->readVar('var_rain_today'),
+            'sunrise'       => $sun['sunrise'],
+            'sunset'        => $sun['sunset'],
+            'pollen'        => $this->pollenText(),
+            'tempHistory'   => $this->temperatureHistory(),
             'warnLevel'     => $warnLevel !== null ? (int) $warnLevel : null,
             'warnText'      => $warnText,
             'warnTable'     => $warnTable,
             'radarHtml'     => $radarHtml,
-            'forecast'      => $forecast,
+            'days'          => $days,
             'updated'       => date('d.m. H:i'),
         ];
     }
@@ -275,21 +387,43 @@ class WeatherDashboard extends IPSModule
         $sunCls    = $sunNow ? 'badge-green' : 'badge-off';
         $sunLabel  = $sunNow ? 'Sonne aktiv' : 'Keine Sonne';
 
-        // Forecast strip
-        $forecastHtml = '';
-        foreach ($d['forecast'] as $seg) {
-            $iconUri  = $this->iconDataUri($seg['icon']);
-            $imgTag   = $iconUri !== '' ? "<img src='{$iconUri}' alt=''/>" : "<span class='fc-noicon'>–</span>";
-            $tempSeg  = $seg['temp'] !== null ? round($seg['temp']) . '°' : '–';
-            $labelEsc = htmlspecialchars($seg['label'], ENT_QUOTES);
-            $timeEsc  = htmlspecialchars($seg['time'], ENT_QUOTES);
-            $forecastHtml .= "<div class='fc-item'>"
-                . "<div class='fc-time'>{$timeEsc}</div>"
-                . "<div class='fc-icon'>{$imgTag}</div>"
-                . "<div class='fc-temp'>{$tempSeg}</div>"
-                . "<div class='fc-label'>{$labelEsc}</div>"
-                . '</div>';
+        $sunriseEsc = htmlspecialchars((string) $d['sunrise'], ENT_QUOTES);
+        $sunsetEsc  = htmlspecialchars((string) $d['sunset'], ENT_QUOTES);
+
+        $pollenBlock = '';
+        if ($d['pollen'] !== null) {
+            $pollenEsc   = htmlspecialchars($d['pollen'], ENT_QUOTES);
+            $pollenBlock = "<div class=\"pollen-row\">🌼 {$pollenEsc}</div>";
         }
+
+        // Forecast, grouped by day with "Vormittag"/"Nachmittag" halves instead
+        // of a flat strip of disconnected 12h icons.
+        $daysHtml = '';
+        foreach ($d['days'] as $day) {
+            $dayLabelEsc = htmlspecialchars($day['label'], ENT_QUOTES);
+            $halvesHtml  = '';
+            foreach ($day['halves'] as $half) {
+                $iconUri  = $this->iconDataUri($half['icon']);
+                $imgTag   = $iconUri !== '' ? "<img src='{$iconUri}' alt=''/>" : "<span class='fc-noicon'>–</span>";
+                $tempHalf = $half['temp'] !== null ? round($half['temp']) . '°' : '–';
+                $descEsc  = htmlspecialchars($half['desc'], ENT_QUOTES);
+                $halfLabelEsc = htmlspecialchars($half['label'], ENT_QUOTES);
+                $halvesHtml .= "<div class='fc-half'>"
+                    . "<div class='fc-half-label'>{$halfLabelEsc}</div>"
+                    . "<div class='fc-half-icon'>{$imgTag}</div>"
+                    . "<div class='fc-temp'>{$tempHalf}</div>"
+                    . "<div class='fc-desc'>{$descEsc}</div>"
+                    . '</div>';
+            }
+            $daysHtml .= "<div class='fc-day'><div class='fc-day-label'>{$dayLabelEsc}</div><div class='fc-halves'>{$halvesHtml}</div></div>";
+        }
+
+        // 24h temperature sparkline
+        $chart          = $this->tempChartPoints($d['tempHistory']);
+        $tempChartBlock = "<div class=\"chart-wrap\"><div class=\"chart-label\">Temperaturverlauf 24h</div>"
+            . "<svg id=\"temp_chart_svg\" viewBox=\"0 0 300 70\" preserveAspectRatio=\"none\">"
+            . "<polyline id=\"temp_chart_poly\" points=\"{$chart}\" fill=\"none\" stroke=\"#7ec8f0\" stroke-width=\"2\"/>"
+            . '</svg></div>';
 
         $updatedEsc = htmlspecialchars($d['updated'], ENT_QUOTES);
 
@@ -325,13 +459,20 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
 .warn-table-wrap iframe{width:100%;height:100%;border:none;border-radius:8px;background:#fff}
 .radar-wrap{flex:1;min-height:80px;border-radius:8px;overflow:hidden}
 .radar-wrap iframe{width:100%;height:100%;border:none;background:#0a1526}
-.forecast-strip{display:flex;gap:8px;overflow-x:auto;flex:none;padding-bottom:2px}
-.fc-item{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:2px;background:#131f33;border-radius:8px;padding:6px 8px;min-width:64px}
-.fc-time{font-size:9px;color:#4a6a8a}
-.fc-icon img{width:32px;height:32px}
-.fc-noicon{font-size:20px;color:#4a6a8a}
-.fc-temp{font-size:13px;font-weight:700}
-.fc-label{font-size:9px;color:#8aa8c8;text-align:center;line-height:1.2}
+.chart-wrap{flex:none;display:flex;flex-direction:column;gap:2px}
+.chart-label{font-size:10px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.03em}
+.chart-wrap svg{width:100%;height:50px;background:#131f33;border-radius:8px}
+.pollen-row{flex:none;font-size:11px;color:#c0a8e0;background:#1f1633;border-radius:8px;padding:5px 8px;line-height:1.3}
+.forecast-days{display:flex;gap:8px;flex:none}
+.fc-day{flex:1;min-width:0;background:#131f33;border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;gap:4px}
+.fc-day-label{font-size:11px;font-weight:700;color:#8aa8c8;text-align:center}
+.fc-halves{display:flex;gap:6px}
+.fc-half{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:1px}
+.fc-half-label{font-size:8px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.02em}
+.fc-half-icon img{width:28px;height:28px}
+.fc-noicon{font-size:18px;color:#4a6a8a}
+.fc-temp{font-size:12px;font-weight:700}
+.fc-desc{font-size:8px;color:#8aa8c8;text-align:center;line-height:1.15}
 </style>
 </head>
 <body>
@@ -346,15 +487,19 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
   <div class="cur-tile"><span class="cur-label">Wind</span><span id="cur_wind" class="cur-value">{$windStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Windrichtung</span><span id="cur_winddir" class="cur-value">{$windDirStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Sonne heute</span><span id="cur_sunshine" class="cur-value">{$sunshineStr}</span></div>
+  <div class="cur-tile"><span class="cur-label">Regen heute</span><span id="cur_raintoday" class="cur-value">{$rainTodayStr}</span></div>
+  <div class="cur-tile"><span class="cur-label">Sonnenaufgang</span><span id="cur_sunrise" class="cur-value">{$sunriseEsc}</span></div>
+  <div class="cur-tile"><span class="cur-label">Sonnenuntergang</span><span id="cur_sunset" class="cur-value">{$sunsetEsc}</span></div>
 </div>
 <div class="status-row">
   <span id="badge_rain" class="badge {$rainCls}">🌧 {$rainLabel}</span>
   <span id="badge_sun" class="badge {$sunCls}">☀ {$sunLabel}</span>
-  <span id="badge_raintoday" class="badge badge-off">💧 heute {$rainTodayStr}</span>
 </div>
+{$pollenBlock}
+{$tempChartBlock}
 {$warnTableBlock}
+<div id="forecast_days" class="forecast-days">{$daysHtml}</div>
 {$radarBlock}
-<div id="forecast_strip" class="forecast-strip">{$forecastHtml}</div>
 <script>
 // WebFront injects its own body{margin-top:...;margin-bottom:...} (reserved
 // space for the tile's title/expand-icon overlay). Measure it and size body
@@ -395,7 +540,9 @@ window.handleMessage = function(raw) {
     sunBadge.className = 'badge ' + (d.sunNow ? 'badge-green' : 'badge-off');
     sunBadge.textContent = '☀ ' + (d.sunNow ? 'Sonne aktiv' : 'Keine Sonne');
   }
-  setText('badge_raintoday', '💧 heute ' + (d.rainToday == null ? '–' : d.rainToday.toFixed(1).replace('.', ',') + ' mm'));
+  setText('cur_raintoday', d.rainToday == null ? '–' : d.rainToday.toFixed(1).replace('.', ',') + ' mm');
+  setText('cur_sunrise', d.sunrise || '–');
+  setText('cur_sunset', d.sunset || '–');
 
   var warnBadge = document.getElementById('warn_badge');
   if (warnBadge) {
@@ -403,7 +550,37 @@ window.handleMessage = function(raw) {
     warnBadge.className = 'badge ' + cls;
     warnBadge.textContent = '⚠ ' + (d.warnText || 'Keine Warnung');
   }
+
+  renderTempChart(d.tempHistory);
 };
+
+// Mirrors tempChartPoints() in PHP so an already-open tile can redraw the
+// sparkline without a full reload when fresh history is pushed.
+function renderTempChart(history) {
+  var poly = document.getElementById('temp_chart_poly');
+  if (!poly || !history || history.length < 2) return;
+
+  var startTs = Math.floor(Date.now() / 1000) - 86400;
+  var vals = history.map(function(p) { return p[1]; });
+  var min = Math.min.apply(null, vals);
+  var max = Math.max.apply(null, vals);
+  if (max - min < 1.0) {
+    var mid = (max + min) / 2;
+    min = mid - 0.5;
+    max = mid + 0.5;
+  }
+  var pad = (max - min) * 0.1;
+  min -= pad;
+  max += pad;
+
+  var w = 300, h = 70;
+  var pts = history.map(function(p) {
+    var x = Math.max(0, Math.min(w, (p[0] - startTs) / 86400 * w));
+    var y = h - ((p[1] - min) / (max - min)) * h;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  poly.setAttribute('points', pts);
+}
 </script>
 </body>
 </html>
