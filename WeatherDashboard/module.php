@@ -210,9 +210,12 @@ class WeatherDashboard extends IPSModule
         return $text !== '' ? $text : null;
     }
 
+    private const CHART_SPAN_SEC = 6 * 3600; // 6h — 24h was too flat/unreadable
+
     /**
-     * Last 24h of raw archived temperature readings as [[unixTimestamp, value], ...],
-     * oldest first, for the SVG sparkline. Empty if the variable isn't archived.
+     * Last CHART_SPAN_SEC of raw archived temperature readings as
+     * [[unixTimestamp, value], ...], oldest first, for the SVG sparkline.
+     * Empty if the variable isn't archived.
      */
     private function temperatureHistory(): array
     {
@@ -224,7 +227,7 @@ class WeatherDashboard extends IPSModule
 
         $now = time();
         try {
-            $rows = @AC_GetLoggedValues($archiveID, $tempID, $now - 86400, $now, 0);
+            $rows = @AC_GetLoggedValues($archiveID, $tempID, $now - self::CHART_SPAN_SEC, $now, 0);
         } catch (\Throwable $e) {
             return [];
         }
@@ -239,33 +242,45 @@ class WeatherDashboard extends IPSModule
         return $points;
     }
 
-    /** SVG polyline "points" attribute value for a 24h temperature history, scaled to fit. */
-    private function tempChartPoints(array $history, float $viewW = 300.0, float $viewH = 70.0): string
+    /**
+     * SVG polyline points plus the (unpadded) real min/max, so the caller can
+     * render an actual readable numeric scale next to the curve.
+     */
+    private function tempChartData(array $history, float $viewW = 300.0, float $viewH = 70.0): array
     {
         if (count($history) < 2) {
-            return '';
+            return ['points' => '', 'min' => null, 'max' => null];
         }
 
-        $startTs = time() - 86400;
-        $values  = array_column($history, 1);
-        $min     = min($values);
-        $max     = max($values);
-        if ($max - $min < 1.0) {
-            $mid = ($max + $min) / 2;
-            $min = $mid - 0.5;
-            $max = $mid + 0.5;
+        $startTs   = time() - self::CHART_SPAN_SEC;
+        $values    = array_column($history, 1);
+        $realMin   = min($values);
+        $realMax   = max($values);
+        $scaleMin  = $realMin;
+        $scaleMax  = $realMax;
+        if ($scaleMax - $scaleMin < 1.0) {
+            $mid      = ($scaleMax + $scaleMin) / 2;
+            $scaleMin = $mid - 0.5;
+            $scaleMax = $mid + 0.5;
         }
-        $pad = ($max - $min) * 0.1;
-        $min -= $pad;
-        $max += $pad;
+        $pad = ($scaleMax - $scaleMin) * 0.15;
+        $scaleMin -= $pad;
+        $scaleMax += $pad;
 
         $pts = [];
         foreach ($history as [$ts, $val]) {
-            $x = max(0, min($viewW, ($ts - $startTs) / 86400 * $viewW));
-            $y = $viewH - (($val - $min) / ($max - $min)) * $viewH;
+            $x = max(0, min($viewW, ($ts - $startTs) / self::CHART_SPAN_SEC * $viewW));
+            $y = $viewH - (($val - $scaleMin) / ($scaleMax - $scaleMin)) * $viewH;
             $pts[] = round($x, 1) . ',' . round($y, 1);
         }
-        return implode(' ', $pts);
+        return ['points' => implode(' ', $pts), 'min' => $realMin, 'max' => $realMax];
+    }
+
+    /** Wraps foreign HTMLBox content with a dark-theme override so it doesn't show as a white/black box inside the dashboard. */
+    private function darkThemeWrap(string $rawHtml): string
+    {
+        return '<style>html,body{background:#0d1b2a !important;color:#d0e8ff !important;margin:0}'
+            . 'a{color:#7ec8f0 !important}</style>' . $rawHtml;
     }
 
     /**
@@ -385,14 +400,14 @@ class WeatherDashboard extends IPSModule
         $hasWarning  = $warnLevel !== null && $warnLevel > 0;
 
         $warnTableSrcDoc = $hasWarning && $d['warnTable'] !== null
-            ? htmlspecialchars((string) $d['warnTable'], ENT_QUOTES)
+            ? htmlspecialchars($this->darkThemeWrap((string) $d['warnTable']), ENT_QUOTES)
             : '';
         $warnTableBlock = $warnTableSrcDoc !== ''
             ? "<div class=\"warn-table-wrap\"><iframe id=\"warn_table\" srcdoc=\"{$warnTableSrcDoc}\"></iframe></div>"
             : '';
 
         $radarSrcDoc = $d['radarHtml'] !== null
-            ? htmlspecialchars((string) $d['radarHtml'], ENT_QUOTES)
+            ? htmlspecialchars($this->darkThemeWrap((string) $d['radarHtml']), ENT_QUOTES)
             : '';
         $radarBlock = $radarSrcDoc !== ''
             ? "<div class=\"radar-wrap\"><iframe id=\"radar\" srcdoc=\"{$radarSrcDoc}\"></iframe></div>"
@@ -412,8 +427,8 @@ class WeatherDashboard extends IPSModule
             $pollenBlock = "<div class=\"pollen-row\">🌼 {$pollenEsc}</div>";
         }
 
-        // Forecast, grouped by day with "Vormittag"/"Nachmittag" halves instead
-        // of a flat strip of disconnected 12h icons.
+        // Forecast, grouped by day with "Tag"/"Nacht" halves instead of a flat
+        // strip of disconnected 12h icons.
         $daysHtml = '';
         foreach ($d['days'] as $day) {
             $dayLabelEsc = htmlspecialchars($day['label'], ENT_QUOTES);
@@ -434,12 +449,21 @@ class WeatherDashboard extends IPSModule
             $daysHtml .= "<div class='fc-day'><div class='fc-day-label'>{$dayLabelEsc}</div><div class='fc-halves'>{$halvesHtml}</div></div>";
         }
 
-        // 24h temperature sparkline
-        $chart          = $this->tempChartPoints($d['tempHistory']);
-        $tempChartBlock = "<div class=\"chart-wrap\"><div class=\"chart-label\">Temperaturverlauf 24h</div>"
+        // 6h temperature sparkline, with a readable numeric scale — a bare
+        // polyline over 24h was too flat/compressed to actually read.
+        $chart       = $this->tempChartData($d['tempHistory']);
+        $chartMaxStr = $chart['max'] !== null ? number_format($chart['max'], 1, ',', '') . '°' : '';
+        $chartMinStr = $chart['min'] !== null ? number_format($chart['min'], 1, ',', '') . '°' : '';
+        $tempChartBlock = "<div class=\"chart-wrap\"><div class=\"chart-label\">Temperaturverlauf 6h</div>"
+            . '<div class="chart-inner">'
             . "<svg id=\"temp_chart_svg\" viewBox=\"0 0 300 70\" preserveAspectRatio=\"none\">"
-            . "<polyline id=\"temp_chart_poly\" points=\"{$chart}\" fill=\"none\" stroke=\"#7ec8f0\" stroke-width=\"2\"/>"
-            . '</svg></div>';
+            . "<polyline id=\"temp_chart_poly\" points=\"{$chart['points']}\" fill=\"none\" stroke=\"#7ec8f0\" stroke-width=\"2\"/>"
+            . '</svg>'
+            . "<span id=\"chart_max\" class=\"chart-max\">{$chartMaxStr}</span>"
+            . "<span id=\"chart_min\" class=\"chart-min\">{$chartMinStr}</span>"
+            . '</div>'
+            . '<div class="chart-xaxis"><span>-6h</span><span>-3h</span><span>jetzt</span></div>'
+            . '</div>';
 
         $updatedEsc = htmlspecialchars($d['updated'], ENT_QUOTES);
 
@@ -472,12 +496,17 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
 .status-row{display:flex;gap:6px;flex-wrap:wrap;flex:none}
 .warn-row{display:flex;align-items:center;gap:8px;flex:none}
 .warn-table-wrap{flex:none;height:140px}
-.warn-table-wrap iframe{width:100%;height:100%;border:none;border-radius:8px;background:#fff}
+.warn-table-wrap iframe{width:100%;height:100%;border:none;border-radius:8px;background:#0d1b2a}
 .radar-wrap{flex:1;min-height:80px;border-radius:8px;overflow:hidden}
-.radar-wrap iframe{width:100%;height:100%;border:none;background:#0a1526}
+.radar-wrap iframe{width:100%;height:100%;border:none;background:#0d1b2a}
 .chart-wrap{flex:none;display:flex;flex-direction:column;gap:2px}
 .chart-label{font-size:10px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.03em}
-.chart-wrap svg{width:100%;height:50px;background:#131f33;border-radius:8px}
+.chart-inner{position:relative}
+.chart-inner svg{width:100%;height:50px;background:#131f33;border-radius:8px;display:block}
+.chart-max,.chart-min{position:absolute;right:4px;font-size:9px;color:#7ec8f0;background:rgba(13,27,42,.7);padding:0 3px;border-radius:3px}
+.chart-max{top:2px}
+.chart-min{bottom:2px}
+.chart-xaxis{display:flex;justify-content:space-between;font-size:9px;color:#4a6a8a;margin-top:2px}
 .pollen-row{flex:none;font-size:11px;color:#c0a8e0;background:#1f1633;border-radius:8px;padding:5px 8px;line-height:1.3}
 .forecast-days{display:flex;gap:8px;flex:none}
 .fc-day{flex:1;min-width:0;background:#131f33;border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;gap:4px}
@@ -570,32 +599,36 @@ window.handleMessage = function(raw) {
   renderTempChart(d.tempHistory);
 };
 
-// Mirrors tempChartPoints() in PHP so an already-open tile can redraw the
-// sparkline without a full reload when fresh history is pushed.
+// Mirrors tempChartData() in PHP so an already-open tile can redraw the
+// sparkline (and its min/max scale labels) without a full reload.
+var CHART_SPAN_SEC = 6 * 3600;
 function renderTempChart(history) {
   var poly = document.getElementById('temp_chart_poly');
   if (!poly || !history || history.length < 2) return;
 
-  var startTs = Math.floor(Date.now() / 1000) - 86400;
+  var startTs = Math.floor(Date.now() / 1000) - CHART_SPAN_SEC;
   var vals = history.map(function(p) { return p[1]; });
-  var min = Math.min.apply(null, vals);
-  var max = Math.max.apply(null, vals);
+  var realMin = Math.min.apply(null, vals);
+  var realMax = Math.max.apply(null, vals);
+  var min = realMin, max = realMax;
   if (max - min < 1.0) {
     var mid = (max + min) / 2;
     min = mid - 0.5;
     max = mid + 0.5;
   }
-  var pad = (max - min) * 0.1;
+  var pad = (max - min) * 0.15;
   min -= pad;
   max += pad;
 
   var w = 300, h = 70;
   var pts = history.map(function(p) {
-    var x = Math.max(0, Math.min(w, (p[0] - startTs) / 86400 * w));
+    var x = Math.max(0, Math.min(w, (p[0] - startTs) / CHART_SPAN_SEC * w));
     var y = h - ((p[1] - min) / (max - min)) * h;
     return x.toFixed(1) + ',' + y.toFixed(1);
   }).join(' ');
   poly.setAttribute('points', pts);
+  setText('chart_max', realMax.toFixed(1).replace('.', ',') + '°');
+  setText('chart_min', realMin.toFixed(1).replace('.', ',') + '°');
 }
 </script>
 </body>
