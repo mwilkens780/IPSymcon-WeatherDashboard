@@ -280,25 +280,41 @@ class WeatherDashboard extends IPSModule
         $segments         = max(1, min(6, $this->ReadPropertyInteger('forecast_segments')));
 
         // Group the 12h day/night segments the forecast API provides into one
-        // card per calendar day, with two labeled halves ("Vormittag"/"Nachmittag")
-        // instead of a flat strip of disconnected-looking icons.
+        // card per calendar day, with two labeled halves ("Tag"/"Nacht" — the
+        // API's own dayOrNight flag, not a guessed morning/afternoon split).
+        //
+        // The API returns no data at all for a day-segment that's already
+        // underway (e.g. "today daytime" once it's past sunrise) — its
+        // Name/DN fields come back empty while Icon/Temperature simply never
+        // get touched and stay frozen at whatever was last cached (which can
+        // be weeks old). Name emptiness is therefore used as the "is this
+        // slot's data actually current" signal, rather than trusting a
+        // present-but-stale Icon/Temperature value.
         $days = [];
         for ($i = 0; $i < $segments; $i += 2) {
             $dayIndex = intdiv($i, 2);
             $dayLabel = $dayIndex === 0 ? 'Heute' : ($dayIndex === 1 ? 'Morgen' : date('D, d.m.', time() + $dayIndex * 86400));
 
             $halves = [];
-            foreach ([$i => 'Vormittag', $i + 1 => 'Nachmittag'] as $seg => $halfLabel) {
-                if ($seg >= $segments) {
-                    continue;
-                }
-                $icon = $this->readForeign($forecastInstance, "DP{$seg}Icon");
-                $temp = $this->readForeign($forecastInstance, "DP{$seg}Temperature");
+            for ($seg = $i; $seg <= $i + 1 && $seg < $segments; $seg++) {
+                $name      = $this->readForeign($forecastInstance, "DP{$seg}Name");
+                $dn        = $this->readForeign($forecastInstance, "DP{$seg}DN");
+                $available = $name !== null && trim((string) $name) !== '';
+
+                $label = match ((string) $dn) {
+                    'D'     => 'Tag',
+                    'N'     => 'Nacht',
+                    default => $seg % 2 === 0 ? 'Tag' : 'Nacht', // fallback if DN itself is unavailable
+                };
+
+                $icon = $available ? $this->readForeign($forecastInstance, "DP{$seg}Icon") : null;
+                $temp = $available ? $this->readForeign($forecastInstance, "DP{$seg}Temperature") : null;
+
                 $halves[] = [
-                    'label' => $halfLabel,
+                    'label' => $label,
                     'icon'  => $icon !== null ? (int) $icon : null,
                     'temp'  => $temp !== null ? (float) $temp : null,
-                    'desc'  => $this->iconLabel($icon !== null ? (int) $icon : null),
+                    'desc'  => $available ? $this->iconLabel($icon !== null ? (int) $icon : null) : 'Keine Daten',
                 ];
             }
 
