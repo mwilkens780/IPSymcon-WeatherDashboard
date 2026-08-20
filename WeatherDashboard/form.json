@@ -55,6 +55,36 @@
           "maximum": 6
         }
       ]
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Weitere Anzeigen",
+      "expanded": false,
+      "items": [
+        {
+          "type": "SelectInstance",
+          "name": "archive_instance",
+          "caption": "Archiv-Instanz (fuer Temperaturverlauf 24h)",
+          "validModules": ["{43192F0B-135B-4CE7-A0A7-1475603F3060}"]
+        },
+        {
+          "type": "SelectInstance",
+          "name": "pollen_instance",
+          "caption": "Pollenflug-Instanz (Pollen Count Modul)",
+          "validModules": ["{3CF9CC0D-8C00-9FFC-FE7D-82CC65C69BE5}"]
+        },
+        {
+          "type": "RowLayout",
+          "items": [
+            { "type": "NumberSpinner", "name": "latitude",  "caption": "Breitengrad",  "digits": 4 },
+            { "type": "NumberSpinner", "name": "longitude", "caption": "Laengengrad", "digits": 4 }
+          ]
+        },
+        {
+          "type": "Label",
+          "caption": "Breiten-/Laengengrad werden nur fuer die astronomische Berechnung von Sonnenauf- und -untergang genutzt."
+        }
+      ]
     }
   ],
   "actions": [
