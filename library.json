@@ -3,8 +3,8 @@
     "author": "Martin Wilkens",
     "name": "Weather Dashboard",
     "description": "Grafisches Wetter-Dashboard fuer IP-Symcon: Homematic-Wetterstation, DWD-Unwetterwarnungen, Regenradar und Wettervorhersage in einer HTML-SDK-Kachel.",
-    "version": "1.3",
-    "build": 4,
-    "date": 1787240491,
+    "version": "1.4",
+    "build": 5,
+    "date": 1792310400,
     "url": "https://github.com/mwilkens780/IPSymcon-WeatherDashboard"
 }

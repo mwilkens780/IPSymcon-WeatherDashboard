@@ -414,8 +414,10 @@ class WeatherDashboard extends IPSModule
             : '';
 
         $rainCls   = $rainNow ? 'badge-on' : 'badge-off';
+        $rainIcon  = $rainNow ? '🌧️' : '⛅';
         $rainLabel = $rainNow ? 'Regnet' : 'Trocken';
         $sunCls    = $sunNow ? 'badge-green' : 'badge-off';
+        $sunIcon   = $sunNow ? '☀️' : '☁️';
         $sunLabel  = $sunNow ? 'Sonne aktiv' : 'Keine Sonne';
 
         $sunriseEsc = htmlspecialchars((string) $d['sunrise'], ENT_QUOTES);
@@ -537,8 +539,8 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
   <div class="cur-tile"><span class="cur-label">Sonnenuntergang</span><span id="cur_sunset" class="cur-value">{$sunsetEsc}</span></div>
 </div>
 <div class="status-row">
-  <span id="badge_rain" class="badge {$rainCls}">🌧 {$rainLabel}</span>
-  <span id="badge_sun" class="badge {$sunCls}">☀ {$sunLabel}</span>
+  <span id="badge_rain" class="badge {$rainCls}">{$rainIcon} {$rainLabel}</span>
+  <span id="badge_sun" class="badge {$sunCls}">{$sunIcon} {$sunLabel}</span>
 </div>
 {$pollenBlock}
 {$tempChartBlock}
@@ -578,12 +580,12 @@ window.handleMessage = function(raw) {
   var rainBadge = document.getElementById('badge_rain');
   if (rainBadge) {
     rainBadge.className = 'badge ' + (d.rainNow ? 'badge-on' : 'badge-off');
-    rainBadge.textContent = '🌧 ' + (d.rainNow ? 'Regnet' : 'Trocken');
+    rainBadge.textContent = (d.rainNow ? '🌧️ Regnet' : '⛅ Trocken');
   }
   var sunBadge = document.getElementById('badge_sun');
   if (sunBadge) {
     sunBadge.className = 'badge ' + (d.sunNow ? 'badge-green' : 'badge-off');
-    sunBadge.textContent = '☀ ' + (d.sunNow ? 'Sonne aktiv' : 'Keine Sonne');
+    sunBadge.textContent = (d.sunNow ? '☀️ Sonne aktiv' : '☁️ Keine Sonne');
   }
   setText('cur_raintoday', d.rainToday == null ? '–' : d.rainToday.toFixed(1).replace('.', ',') + ' mm');
   setText('cur_sunrise', d.sunrise || '–');
