@@ -413,21 +413,17 @@ class WeatherDashboard extends IPSModule
             ? "<div class=\"radar-wrap\"><iframe id=\"radar\" srcdoc=\"{$radarSrcDoc}\"></iframe></div>"
             : '';
 
-        $rainCls   = $rainNow ? 'badge-on' : 'badge-off';
+        $rainColor = $rainNow ? '#7ec8f0' : '#4a6a8a';
         $rainIcon  = $rainNow ? '🌧️' : '⛅';
         $rainLabel = $rainNow ? 'Regnet' : 'Trocken';
-        $sunCls    = $sunNow ? 'badge-green' : 'badge-off';
+        $sunColor  = $sunNow ? '#7ee89a' : '#4a6a8a';
         $sunIcon   = $sunNow ? '☀️' : '☁️';
         $sunLabel  = $sunNow ? 'Sonne aktiv' : 'Keine Sonne';
 
         $sunriseEsc = htmlspecialchars((string) $d['sunrise'], ENT_QUOTES);
         $sunsetEsc  = htmlspecialchars((string) $d['sunset'], ENT_QUOTES);
 
-        $pollenBlock = '';
-        if ($d['pollen'] !== null) {
-            $pollenEsc   = htmlspecialchars($d['pollen'], ENT_QUOTES);
-            $pollenBlock = "<div class=\"pollen-row\">🌼 {$pollenEsc}</div>";
-        }
+        $pollenEsc = $d['pollen'] !== null ? htmlspecialchars($d['pollen'], ENT_QUOTES) : 'Keine Daten';
 
         // Forecast, grouped by day with "Tag"/"Nacht" halves instead of a flat
         // strip of disconnected 12h icons.
@@ -482,7 +478,6 @@ html{height:100%}
 body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;background:#0d1b2a;color:#d0e8ff;display:flex;flex-direction:column;padding:10px;gap:8px}
 .header{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:14px;font-weight:600;border-bottom:1px solid #1e3a5f;padding-bottom:6px;flex:none}
 .updated{font-size:10px;color:#3a5a7a;font-weight:400}
-.badge{padding:3px 8px;border-radius:12px;font-size:12px;border:1px solid transparent;white-space:nowrap}
 .badge-on{background:#1e4a6e;border-color:#3a8abf;color:#7ec8f0}
 .badge-off{background:#1a2535;border-color:#2a3a50;color:#4a6a8a}
 .badge-warn{background:#4a2010;border-color:#8a4020;color:#f08060}
@@ -495,8 +490,8 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
 .cur-tile{display:flex;flex-direction:column;gap:1px;background:#131f33;border-radius:8px;padding:6px 8px}
 .cur-label{font-size:10px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.03em}
 .cur-value{font-size:16px;font-weight:700;color:#d0e8ff}
-.status-row{display:flex;gap:6px;flex-wrap:wrap;flex:none}
-.warn-row{display:flex;align-items:center;gap:8px;flex:none}
+.cur-value-sm{font-size:12px;font-weight:600;line-height:1.3;color:#d0e8ff}
+.warn-tile{flex:none;border:1px solid transparent;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
 .warn-table-wrap{flex:none;height:140px}
 .warn-table-wrap iframe{width:100%;height:100%;border:none;border-radius:8px;background:#0d1b2a}
 .radar-wrap{flex:1;min-height:80px;border-radius:8px;overflow:hidden}
@@ -509,7 +504,6 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
 .chart-max{top:2px}
 .chart-min{bottom:2px}
 .chart-xaxis{display:flex;justify-content:space-between;font-size:9px;color:#4a6a8a;margin-top:2px}
-.pollen-row{flex:none;font-size:11px;color:#c0a8e0;background:#1f1633;border-radius:8px;padding:5px 8px;line-height:1.3}
 .forecast-days{display:flex;gap:8px;flex:none}
 .fc-day{flex:1;min-width:0;background:#131f33;border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;gap:4px}
 .fc-day-label{font-size:11px;font-weight:700;color:#8aa8c8;text-align:center}
@@ -525,24 +519,22 @@ body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemF
 <body>
 <div class="header">
   <span>🌦 Wetter <span id="updated" class="updated">Stand {$updatedEsc}</span></span>
-  <span id="warn_badge" class="badge {$warnCls}">⚠ {$warnTextEsc}</span>
 </div>
+<div id="warn_tile" class="warn-tile {$warnCls}">⚠️ {$warnTextEsc}</div>
 <div class="current-grid">
   <div class="cur-tile"><span class="cur-label">Temperatur</span><span id="cur_temp" class="cur-value">{$tempStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Luftfeuchte</span><span id="cur_hum" class="cur-value">{$humStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Helligkeit</span><span id="cur_illum" class="cur-value">{$illumStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Wind</span><span id="cur_wind" class="cur-value">{$windStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Windrichtung</span><span id="cur_winddir" class="cur-value">{$windDirStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Sonne heute</span><span id="cur_sunshine" class="cur-value">{$sunshineStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Regen heute</span><span id="cur_raintoday" class="cur-value">{$rainTodayStr}</span></div>
   <div class="cur-tile"><span class="cur-label">Sonnenaufgang</span><span id="cur_sunrise" class="cur-value">{$sunriseEsc}</span></div>
   <div class="cur-tile"><span class="cur-label">Sonnenuntergang</span><span id="cur_sunset" class="cur-value">{$sunsetEsc}</span></div>
+  <div class="cur-tile"><span class="cur-label">Sonnenschein</span><span id="cur_sun" class="cur-value" style="color:{$sunColor}">{$sunIcon} {$sunLabel}</span></div>
+  <div class="cur-tile"><span class="cur-label">Sonne heute</span><span id="cur_sunshine" class="cur-value">{$sunshineStr}</span></div>
+  <div class="cur-tile"><span class="cur-label">Regen</span><span id="cur_rain" class="cur-value" style="color:{$rainColor}">{$rainIcon} {$rainLabel}</span></div>
+  <div class="cur-tile"><span class="cur-label">Regen heute</span><span id="cur_raintoday" class="cur-value">{$rainTodayStr}</span></div>
+  <div class="cur-tile"><span class="cur-label">Pollenflug</span><span id="cur_pollen" class="cur-value cur-value-sm">🌼 {$pollenEsc}</span></div>
 </div>
-<div class="status-row">
-  <span id="badge_rain" class="badge {$rainCls}">{$rainIcon} {$rainLabel}</span>
-  <span id="badge_sun" class="badge {$sunCls}">{$sunIcon} {$sunLabel}</span>
-</div>
-{$pollenBlock}
 {$tempChartBlock}
 {$warnTableBlock}
 <div id="forecast_days" class="forecast-days">{$daysHtml}</div>
@@ -577,25 +569,26 @@ window.handleMessage = function(raw) {
   setText('cur_wind', d.windSpeed == null ? '–' : d.windSpeed.toFixed(1).replace('.', ',') + ' km/h');
   setText('cur_sunshine', d.sunshineToday == null ? '–' : (Math.floor(d.sunshineToday/60) + 'h ' + String(Math.round(d.sunshineToday%60)).padStart(2,'0') + 'min'));
 
-  var rainBadge = document.getElementById('badge_rain');
-  if (rainBadge) {
-    rainBadge.className = 'badge ' + (d.rainNow ? 'badge-on' : 'badge-off');
-    rainBadge.textContent = (d.rainNow ? '🌧️ Regnet' : '⛅ Trocken');
+  var rainTile = document.getElementById('cur_rain');
+  if (rainTile) {
+    rainTile.style.color = d.rainNow ? '#7ec8f0' : '#4a6a8a';
+    rainTile.textContent = (d.rainNow ? '🌧️ Regnet' : '⛅ Trocken');
   }
-  var sunBadge = document.getElementById('badge_sun');
-  if (sunBadge) {
-    sunBadge.className = 'badge ' + (d.sunNow ? 'badge-green' : 'badge-off');
-    sunBadge.textContent = (d.sunNow ? '☀️ Sonne aktiv' : '☁️ Keine Sonne');
+  var sunTile = document.getElementById('cur_sun');
+  if (sunTile) {
+    sunTile.style.color = d.sunNow ? '#7ee89a' : '#4a6a8a';
+    sunTile.textContent = (d.sunNow ? '☀️ Sonne aktiv' : '☁️ Keine Sonne');
   }
   setText('cur_raintoday', d.rainToday == null ? '–' : d.rainToday.toFixed(1).replace('.', ',') + ' mm');
   setText('cur_sunrise', d.sunrise || '–');
   setText('cur_sunset', d.sunset || '–');
+  setText('cur_pollen', '🌼 ' + (d.pollen || 'Keine Daten'));
 
-  var warnBadge = document.getElementById('warn_badge');
-  if (warnBadge) {
+  var warnTile = document.getElementById('warn_tile');
+  if (warnTile) {
     var cls = {0:'badge-off',1:'badge-yellow',2:'badge-amber',3:'badge-red',4:'badge-violet'}[d.warnLevel] || 'badge-off';
-    warnBadge.className = 'badge ' + cls;
-    warnBadge.textContent = '⚠ ' + (d.warnText || 'Keine Warnung');
+    warnTile.className = 'warn-tile ' + cls;
+    warnTile.textContent = '⚠️ ' + (d.warnText || 'Keine Warnung');
   }
 
   renderTempChart(d.tempHistory);
