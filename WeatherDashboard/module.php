@@ -36,28 +36,27 @@ class WeatherDashboard extends IPSModule
 
         $this->RegisterPropertyInteger('update_interval', 300);
 
-        // Defaults pre-filled with this installation's actual object IDs
-        // (category "Wetter", 56501) so the module works out of the box;
-        // still overridable via the config form's SelectVariable pickers.
-        $this->RegisterPropertyInteger('var_temp',           39485); // ACTUAL_TEMPERATURE
-        $this->RegisterPropertyInteger('var_humidity',       56259); // HUMIDITY
-        $this->RegisterPropertyInteger('var_wind_speed',     55831); // WIND_SPEED
-        $this->RegisterPropertyInteger('var_wind_dir',       45273); // WIND_DIR
-        $this->RegisterPropertyInteger('var_illumination',   25842); // ILLUMINATION
-        $this->RegisterPropertyInteger('var_rain_now',       22316); // RAIN (bool)
-        $this->RegisterPropertyInteger('var_sun_now',        48188); // SUNSHINE_THRESHOLD_OVERRUN (bool)
-        $this->RegisterPropertyInteger('var_sunshine_today', 33698); // SonnenscheinMinuten
-        $this->RegisterPropertyInteger('var_rain_today',     41303); // RegenHeute
+        // Keine installationsspezifischen Vorbelegungen: alle Quellen werden im
+        // Konfigurationsformular ausgewaehlt (0 = nicht zugeordnet).
+        $this->RegisterPropertyInteger('var_temp',           0); // z. B. ACTUAL_TEMPERATURE
+        $this->RegisterPropertyInteger('var_humidity',       0); // z. B. HUMIDITY
+        $this->RegisterPropertyInteger('var_wind_speed',     0); // z. B. WIND_SPEED
+        $this->RegisterPropertyInteger('var_wind_dir',       0); // z. B. WIND_DIR
+        $this->RegisterPropertyInteger('var_illumination',   0); // z. B. ILLUMINATION
+        $this->RegisterPropertyInteger('var_rain_now',       0); // z. B. RAIN (bool)
+        $this->RegisterPropertyInteger('var_sun_now',        0); // z. B. SUNSHINE_THRESHOLD_OVERRUN (bool)
+        $this->RegisterPropertyInteger('var_sunshine_today', 0); // Sonnenschein-Minuten heute
+        $this->RegisterPropertyInteger('var_rain_today',     0); // Regenmenge heute
 
-        $this->RegisterPropertyInteger('warning_instance',  38412); // Unwetterwarnung (Weather Warning)
-        $this->RegisterPropertyInteger('forecast_instance', 57338); // Weather.com (WundergroundPWSSync)
+        $this->RegisterPropertyInteger('warning_instance',  0); // Weather Warning
+        $this->RegisterPropertyInteger('forecast_instance', 0); // WundergroundPWSSync
         $this->RegisterPropertyInteger('forecast_segments', 6);
 
-        $this->RegisterPropertyInteger('archive_instance', 59233); // Archive Control
-        $this->RegisterPropertyInteger('pollen_instance',  52629); // Pollenflug (Pollen Count)
+        $this->RegisterPropertyInteger('archive_instance', 0); // Archive Control
+        $this->RegisterPropertyInteger('pollen_instance',  0); // Pollen Count
 
-        $this->RegisterPropertyFloat('latitude',  0.0);
-        $this->RegisterPropertyFloat('longitude', 0.0);
+        // Standort fuer Sonnenauf-/-untergang kommt aus der globalen
+        // Standort-Instanz (Location Control), siehe sunTimes().
 
         $this->RegisterTimer('UpdateTimer', 0, 'WXD_Refresh($_IPS[\'TARGET\']);');
 
@@ -179,12 +178,22 @@ class WeatherDashboard extends IPSModule
         return self::ICON_LABELS[$code] ?? '–';
     }
 
-    /** Today's sunrise/sunset as HH:MM, computed astronomically (no external dependency). */
+    /** Location Control (Kern-Instanz "Standort"), dort pflegt IPS die globalen Koordinaten. */
+    private const LOCATION_MODULE = '{45E97A63-F870-408A-B259-2933F7EABF74}';
+
+    /** Today's sunrise/sunset as HH:MM, computed astronomically from the global IPS location. */
     private function sunTimes(): array
     {
-        $lat = $this->ReadPropertyFloat('latitude');
-        $lon = $this->ReadPropertyFloat('longitude');
-        $info = date_sun_info(time(), $lat, $lon);
+        $none = ['sunrise' => '–', 'sunset' => '–'];
+        $ids  = IPS_GetInstanceListByModuleID(self::LOCATION_MODULE);
+        if (count($ids) === 0) {
+            return $none;
+        }
+        $loc = json_decode((string) @IPS_GetProperty($ids[0], 'Location'), true);
+        if (!is_array($loc) || !isset($loc['latitude'], $loc['longitude'])) {
+            return $none;
+        }
+        $info = date_sun_info(time(), (float) $loc['latitude'], (float) $loc['longitude']);
         $fmt = static function ($ts) {
             return is_int($ts) ? date('H:i', $ts) : '–';
         };

@@ -11,11 +11,14 @@ https://github.com/mwilkens780/IPSymcon-WeatherDashboard
 
 ## Konfiguration
 
-Die Instanz-Einstellungen sind mit den Objekt-IDs dieser konkreten Installation vorbelegt (Kategorie "Wetter", 56501). Bei Bedarf über die Variablen-/Instanz-Auswahl anpassen:
+Nach dem Anlegen der Instanz einmalig die Quellen über die Variablen-/Instanz-Auswahl zuweisen:
 
 - **Aktuelle Werte**: Temperatur, Luftfeuchtigkeit, Windgeschwindigkeit/-richtung, Helligkeit, Regen/Sonne jetzt, Sonnenschein/Regen heute
 - **Unwetterwarnung**: Instanz des "Weather Warning"-Moduls (liefert Warnstufe, Warntext, Warnmeldungs-Tabelle, Regenradar-Film)
 - **Wettervorhersage**: Instanz des "WundergroundPWSSync"-Moduls (liefert Icon-Code + Temperatur je 12h-Segment)
+- **Weitere Anzeigen**: Archiv-Instanz (Temperaturverlauf) und Pollenflug-Instanz
+
+Sonnenauf- und -untergang werden aus dem globalen IPS-Standort berechnet (Kern Instanzen → Standort), eigene Koordinaten braucht das Modul nicht.
 
 ## Kachel einrichten
 

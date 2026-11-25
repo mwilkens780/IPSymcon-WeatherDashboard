@@ -74,15 +74,8 @@
           "validModules": ["{3CF9CC0D-8C00-9FFC-FE7D-82CC65C69BE5}"]
         },
         {
-          "type": "RowLayout",
-          "items": [
-            { "type": "NumberSpinner", "name": "latitude",  "caption": "Breitengrad",  "digits": 4 },
-            { "type": "NumberSpinner", "name": "longitude", "caption": "Laengengrad", "digits": 4 }
-          ]
-        },
-        {
           "type": "Label",
-          "caption": "Breiten-/Laengengrad werden nur fuer die astronomische Berechnung von Sonnenauf- und -untergang genutzt."
+          "caption": "Sonnenauf- und -untergang werden aus dem globalen Standort berechnet (Kern Instanzen > Standort)."
         }
       ]
     }
