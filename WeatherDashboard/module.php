@@ -2,8 +2,12 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/../libs/TileKit.php';
+
 class WeatherDashboard extends IPSModule
 {
+    use \Fuchsbau\TileKit\WeatherDashboard\TileKit;
+
     // ─── Weather Channel icon code (0-47) → short German label ────────────────
     // Standard, publicly documented icon set used by the Weather Company / WU
     // API (and by the WundergroundPWSSync module's bundled icon PNGs).
@@ -102,8 +106,7 @@ class WeatherDashboard extends IPSModule
     public function Refresh(): void
     {
         try {
-            $data = $this->collectData();
-            $this->pushValue('__all__', $data);
+            $this->tkPush('__all__', $this->view($this->collectData()));
             $this->SetStatus(102);
         } catch (\Throwable $e) {
             $this->LogMessage('WeatherDashboard Refresh: ' . $e->getMessage(), KL_ERROR);
@@ -112,11 +115,6 @@ class WeatherDashboard extends IPSModule
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────
-
-    private function pushValue(string $key, $value): void
-    {
-        $this->UpdateVisualizationValue(json_encode(['key' => $key, 'value' => $value]));
-    }
 
     /** Reads a variable's value, or null if the configured ID is 0/invalid. */
     private function readVar(string $prop)
@@ -276,13 +274,6 @@ class WeatherDashboard extends IPSModule
         return ['points' => implode(' ', $pts), 'min' => $realMin, 'max' => $realMax];
     }
 
-    /** Wraps foreign HTMLBox content with a dark-theme override so it doesn't show as a white/black box inside the dashboard. */
-    private function darkThemeWrap(string $rawHtml): string
-    {
-        return '<style>html,body{background:#0d1b2a !important;color:#d0e8ff !important;margin:0}'
-            . 'a{color:#7ec8f0 !important}</style>' . $rawHtml;
-    }
-
     /**
      * Gathers every value the tile needs into one flat array — used both for
      * the initial PHP render and as the payload pushed to already-open tiles,
@@ -308,7 +299,8 @@ class WeatherDashboard extends IPSModule
         $days = [];
         for ($i = 0; $i < $segments; $i += 2) {
             $dayIndex = intdiv($i, 2);
-            $dayLabel = $dayIndex === 0 ? 'Heute' : ($dayIndex === 1 ? 'Morgen' : date('D, d.m.', time() + $dayIndex * 86400));
+            $dayTs    = time() + $dayIndex * 86400;
+            $dayLabel = $dayIndex === 0 ? 'Heute' : ($dayIndex === 1 ? 'Morgen' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][(int) date('w', $dayTs)] . ', ' . date('d.m.', $dayTs));
 
             $halves = [];
             for ($seg = $i; $seg <= $i + 1 && $seg < $segments; $seg++) {
@@ -365,269 +357,151 @@ class WeatherDashboard extends IPSModule
         ];
     }
 
-    private function levelClass(?int $level): string
+    // ─── Rendering (TileKit, siehe docs/ui-kachel.md im Workspace) ─────────────
+
+    private static function num(?float $v, int $digits, string $suffix): string
     {
-        return match ($level) {
-            0       => 'badge-off',
-            1       => 'badge-yellow',
-            2       => 'badge-amber',
-            3       => 'badge-red',
-            4       => 'badge-violet',
-            default => 'badge-off',
-        };
+        return $v === null ? '–' : number_format($v, $digits, ',', '') . $suffix;
+    }
+
+    /**
+     * Alle Anzeige-Texte an EINER Stelle – Erstrender und Live-Push nutzen
+     * dasselbe Ergebnis, das JS setzt nur noch ein (frueher doppelt in PHP und JS).
+     */
+    private function view(array $d): array
+    {
+        $f        = static fn ($v) => $v === null ? null : (float) $v;
+        $rainNow  = (bool) $d['rainNow'];
+        $sunNow   = (bool) $d['sunNow'];
+        $sunMin   = $d['sunshineToday'] !== null ? (int) round((float) $d['sunshineToday']) : null;
+        $level    = $d['warnLevel'];
+        $hasWarn  = $level !== null && $level > 0;
+        $chart    = $this->tempChartData($d['tempHistory']);
+
+        return [
+            'updated'  => $d['updated'],
+            'temp'     => self::num($f($d['temp']), 1, ' °C'),
+            'chart'    => $chart['points'],
+            'chartMax' => $chart['max'] !== null ? self::num($chart['max'], 1, '°') : '',
+            'chartMin' => $chart['min'] !== null ? self::num($chart['min'], 1, '°') : '',
+            'humidity' => $d['humidity'] === null ? '–' : round((float) $d['humidity']) . ' %',
+            'illum'    => $d['illumination'] === null ? '–' : number_format((float) $d['illumination'], 0, ',', '.') . ' lx',
+            'wind'     => self::num($f($d['windSpeed']), 1, ' km/h'),
+            'windDir'  => $d['windDir'] === null ? '' : 'aus ' . $this->compassText((float) $d['windDir']),
+            'sun'      => ($d['sunrise'] ?: '–') . ' – ' . ($d['sunset'] ?: '–'),
+            'sunshine' => $sunMin === null ? '–' : sprintf('%d h %02d min', intdiv($sunMin, 60), $sunMin % 60),
+            'rainToday' => self::num($f($d['rainToday']), 1, ' mm'),
+            'rainNow'  => ['text' => $rainNow ? 'Regnet' : 'Trocken', 'icon' => $rainNow ? '🌧️' : '⛅', 'state' => $rainNow ? 'accent' : ''],
+            'sunNow'   => ['text' => $sunNow ? 'Sonne' : 'Keine Sonne', 'icon' => $sunNow ? '☀️' : '☁️', 'state' => $sunNow ? 'ok' : ''],
+            'pollen'   => ['text' => $d['pollen'] ?? 'Keine Daten', 'icon' => '🌼', 'state' => ''],
+            // Stufe 1/2 gelb/orange = Warnfarbe, 3/4 rot/violett = ganze Kachel rot
+            'warn'     => [
+                'text'  => $d['warnText'] !== null && $d['warnText'] !== '' ? (string) $d['warnText'] : 'Keine Warnung',
+                'icon'  => $hasWarn ? '⚠️' : '✅',
+                'state' => !$hasWarn ? 'ok' : ($level >= 3 ? 'alarm' : 'warn'),
+            ],
+            'warnTable' => $hasWarn && $d['warnTable'] !== null ? (string) $d['warnTable'] : '',
+            'radar'    => $d['radarHtml'] !== null ? (string) $d['radarHtml'] : '',
+            'forecast' => $this->forecastHtml($d['days']),
+        ];
+    }
+
+    /** Eine Kachel je Tag mit Tag-/Nacht-Haelfte (Icon, Temperatur, Beschreibung). */
+    private function forecastHtml(array $days): string
+    {
+        $html = '';
+        foreach ($days as $day) {
+            $halves = '';
+            foreach ($day['halves'] as $half) {
+                $uri    = $this->iconDataUri($half['icon']);
+                $img    = $uri !== '' ? "<img src=\"{$uri}\" alt=\"\">" : '<span class="fc-noicon">–</span>';
+                $temp   = $half['temp'] !== null ? round($half['temp']) . '°' : '–';
+                $halves .= '<div class="fc-half"><span class="tk-sub">' . self::tkEsc($half['label']) . "</span>{$img}"
+                    . "<span class=\"fc-temp\">{$temp}</span><span class=\"tk-sub fc-desc\">" . self::tkEsc($half['desc']) . '</span></div>';
+            }
+            $html .= '<div class="tk-tile fc-day"><span class="tk-name">' . self::tkEsc($day['label']) . "</span><div class=\"fc-halves\">{$halves}</div></div>";
+        }
+        return $html;
     }
 
     private function buildDashboardHTML(): string
     {
-        $d = $this->collectData();
+        $v = $this->view($this->collectData());
 
-        $tempStr    = $d['temp'] !== null ? number_format((float) $d['temp'], 1, ',', '') . ' °C' : '–';
-        $humStr     = $d['humidity'] !== null ? round((float) $d['humidity']) . '%' : '–';
-        $windStr    = $d['windSpeed'] !== null ? number_format((float) $d['windSpeed'], 1, ',', '') . ' km/h' : '–';
-        $windDirStr = $this->compassText($d['windDir'] !== null ? (float) $d['windDir'] : null);
-        $illumStr   = $d['illumination'] !== null ? round((float) $d['illumination']) . ' lx' : '–';
-        $rainNow    = (bool) $d['rainNow'];
-        $sunNow     = (bool) $d['sunNow'];
-
-        $sunshineMin  = $d['sunshineToday'] !== null ? (int) round((float) $d['sunshineToday']) : null;
-        $sunshineStr  = $sunshineMin !== null ? sprintf('%dh %02dmin', intdiv($sunshineMin, 60), $sunshineMin % 60) : '–';
-        $rainTodayStr = $d['rainToday'] !== null ? number_format((float) $d['rainToday'], 1, ',', '') . ' mm' : '–';
-
-        $warnLevel = $d['warnLevel'];
-        $warnCls   = $this->levelClass($warnLevel);
-        $warnText  = $d['warnText'] !== null && $d['warnText'] !== '' ? (string) $d['warnText'] : 'Keine Warnung';
-        $warnTextEsc = htmlspecialchars($warnText, ENT_QUOTES);
-        $hasWarning  = $warnLevel !== null && $warnLevel > 0;
-
-        $warnTableSrcDoc = $hasWarning && $d['warnTable'] !== null
-            ? htmlspecialchars($this->darkThemeWrap((string) $d['warnTable']), ENT_QUOTES)
-            : '';
-        $warnTableBlock = $warnTableSrcDoc !== ''
-            ? "<div class=\"warn-table-wrap\"><iframe id=\"warn_table\" srcdoc=\"{$warnTableSrcDoc}\"></iframe></div>"
+        $chart = $v['chart'] !== ''
+            ? '<div class="tk-chart temp-chart"><svg viewBox="0 0 300 70" preserveAspectRatio="none"><polyline id="temp_poly" points="' . $v['chart'] . '"/></svg>'
+                . '<span id="chart_max" class="chart-max">' . $v['chartMax'] . '</span><span id="chart_min" class="chart-min">' . $v['chartMin'] . '</span>'
+                . '<div class="chart-x"><span>-6h</span><span>-3h</span><span>jetzt</span></div></div>'
             : '';
 
-        $radarSrcDoc = $d['radarHtml'] !== null
-            ? htmlspecialchars($this->darkThemeWrap((string) $d['radarHtml']), ENT_QUOTES)
-            : '';
-        $radarBlock = $radarSrcDoc !== ''
-            ? "<div class=\"radar-wrap\"><iframe id=\"radar\" srcdoc=\"{$radarSrcDoc}\"></iframe></div>"
-            : '';
-
-        $rainColor = $rainNow ? '#7ec8f0' : '#4a6a8a';
-        $rainIcon  = $rainNow ? '🌧️' : '⛅';
-        $rainLabel = $rainNow ? 'Regnet' : 'Trocken';
-        $sunColor  = $sunNow ? '#7ee89a' : '#4a6a8a';
-        $sunIcon   = $sunNow ? '☀️' : '☁️';
-        $sunLabel  = $sunNow ? 'Sonne aktiv' : 'Keine Sonne';
-
-        $sunriseEsc = htmlspecialchars((string) $d['sunrise'], ENT_QUOTES);
-        $sunsetEsc  = htmlspecialchars((string) $d['sunset'], ENT_QUOTES);
-
-        $pollenEsc = $d['pollen'] !== null ? htmlspecialchars($d['pollen'], ENT_QUOTES) : 'Keine Daten';
-
-        // Forecast, grouped by day with "Tag"/"Nacht" halves instead of a flat
-        // strip of disconnected 12h icons.
-        $daysHtml = '';
-        foreach ($d['days'] as $day) {
-            $dayLabelEsc = htmlspecialchars($day['label'], ENT_QUOTES);
-            $halvesHtml  = '';
-            foreach ($day['halves'] as $half) {
-                $iconUri  = $this->iconDataUri($half['icon']);
-                $imgTag   = $iconUri !== '' ? "<img src='{$iconUri}' alt=''/>" : "<span class='fc-noicon'>–</span>";
-                $tempHalf = $half['temp'] !== null ? round($half['temp']) . '°' : '–';
-                $descEsc  = htmlspecialchars($half['desc'], ENT_QUOTES);
-                $halfLabelEsc = htmlspecialchars($half['label'], ENT_QUOTES);
-                $halvesHtml .= "<div class='fc-half'>"
-                    . "<div class='fc-half-label'>{$halfLabelEsc}</div>"
-                    . "<div class='fc-half-icon'>{$imgTag}</div>"
-                    . "<div class='fc-temp'>{$tempHalf}</div>"
-                    . "<div class='fc-desc'>{$descEsc}</div>"
-                    . '</div>';
-            }
-            $daysHtml .= "<div class='fc-day'><div class='fc-day-label'>{$dayLabelEsc}</div><div class='fc-halves'>{$halvesHtml}</div></div>";
+        $body  = '<div class="tk-grid">';
+        $body .= self::tkStatusTile('warn', 'Wetterwarnung', $v['warn']['text'], $v['warn']['icon'], $v['warn']['state'], null, '', 'tk-span2');
+        $body .= self::tkGroup('Aktuell');
+        $body .= '<div class="tk-tile tk-span2" id="temp_card"><span class="tk-name">Temperatur</span><span id="temp_val" class="tk-value">' . self::tkEsc($v['temp']) . "</span>{$chart}</div>";
+        $body .= self::tkValueTile('hum', 'Luftfeuchte', $v['humidity']);
+        $body .= '<div class="tk-tile" id="wind_card"><span class="tk-name">Wind</span><span id="wind_val" class="tk-value">' . self::tkEsc($v['wind'])
+            . '</span><span id="wind_sub" class="tk-sub">' . self::tkEsc($v['windDir']) . '</span></div>';
+        $body .= self::tkValueTile('illum', 'Helligkeit', $v['illum']);
+        $body .= self::tkStatusTile('rain_now', 'Regen', $v['rainNow']['text'], $v['rainNow']['icon'], $v['rainNow']['state']);
+        $body .= self::tkStatusTile('sun_now', 'Sonnenschein', $v['sunNow']['text'], $v['sunNow']['icon'], $v['sunNow']['state']);
+        $body .= self::tkValueTile('sunshine', 'Sonne heute', $v['sunshine']);
+        $body .= self::tkValueTile('rain_today', 'Regen heute', $v['rainToday']);
+        $body .= self::tkValueTile('sun', 'Sonne auf / unter', $v['sun'], '', 'sun-times');
+        $body .= self::tkStatusTile('pollen', 'Pollenflug', $v['pollen']['text'], $v['pollen']['icon']);
+        $body .= '<div id="warn_table_wrap" class="tk-full"' . ($v['warnTable'] === '' ? ' hidden' : '') . '>' . self::tkHtmlTile('warn_table', 'Warnmeldungen', $v['warnTable'], 140) . '</div>';
+        $body .= self::tkGroup('Vorhersage');
+        $body .= '<div id="forecast" class="fc-wrap">' . $v['forecast'] . '</div>';
+        if ($v['radar'] !== '') {
+            $body .= self::tkGroup('Regenradar');
+            $body .= self::tkHtmlTile('radar', 'Regenradar', $v['radar'], 260);
         }
+        $body .= '</div>';
 
-        // 6h temperature sparkline, with a readable numeric scale — a bare
-        // polyline over 24h was too flat/compressed to actually read.
-        $chart       = $this->tempChartData($d['tempHistory']);
-        $chartMaxStr = $chart['max'] !== null ? number_format($chart['max'], 1, ',', '') . '°' : '';
-        $chartMinStr = $chart['min'] !== null ? number_format($chart['min'], 1, ',', '') . '°' : '';
-        $tempChartBlock = "<div class=\"chart-wrap\"><div class=\"chart-label\">Temperaturverlauf 6h</div>"
-            . '<div class="chart-inner">'
-            . "<svg id=\"temp_chart_svg\" viewBox=\"0 0 300 70\" preserveAspectRatio=\"none\">"
-            . "<polyline id=\"temp_chart_poly\" points=\"{$chart['points']}\" fill=\"none\" stroke=\"#7ec8f0\" stroke-width=\"2\"/>"
-            . '</svg>'
-            . "<span id=\"chart_max\" class=\"chart-max\">{$chartMaxStr}</span>"
-            . "<span id=\"chart_min\" class=\"chart-min\">{$chartMinStr}</span>"
-            . '</div>'
-            . '<div class="chart-xaxis"><span>-6h</span><span>-3h</span><span>jetzt</span></div>'
-            . '</div>';
-
-        $updatedEsc = htmlspecialchars($d['updated'], ENT_QUOTES);
-
-        $initJson = json_encode($d);
-
-        return <<<HTML
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-html{height:100%}
-*{box-sizing:border-box;margin:0;padding:0}
-body{overflow-y:auto;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;background:#0d1b2a;color:#d0e8ff;display:flex;flex-direction:column;padding:10px;gap:8px}
-.header{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:14px;font-weight:600;border-bottom:1px solid #1e3a5f;padding-bottom:6px;flex:none}
-.updated{font-size:10px;color:#3a5a7a;font-weight:400}
-.badge-on{background:#1e4a6e;border-color:#3a8abf;color:#7ec8f0}
-.badge-off{background:#1a2535;border-color:#2a3a50;color:#4a6a8a}
-.badge-warn{background:#4a2010;border-color:#8a4020;color:#f08060}
-.badge-green{background:#124a1e;border-color:#2f8a44;color:#7ee89a}
-.badge-amber{background:#4a3510;border-color:#8a6a20;color:#f0c060}
-.badge-yellow{background:#4a4310;border-color:#8a7d20;color:#f0e060}
-.badge-red{background:#4a1010;border-color:#8a2020;color:#f06060}
-.badge-violet{background:#3a1050;border-color:#7020a0;color:#d090f0}
-.current-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;flex:none}
-.cur-tile{display:flex;flex-direction:column;gap:1px;background:#131f33;border-radius:8px;padding:6px 8px}
-.cur-label{font-size:10px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.03em}
-.cur-value{font-size:16px;font-weight:700;color:#d0e8ff}
-.cur-value-sm{font-size:12px;font-weight:600;line-height:1.3;color:#d0e8ff}
-.warn-tile{flex:none;border:1px solid transparent;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
-.warn-table-wrap{flex:none;height:140px}
-.warn-table-wrap iframe{width:100%;height:100%;border:none;border-radius:8px;background:#0d1b2a}
-.radar-wrap{flex:1;min-height:80px;border-radius:8px;overflow:hidden}
-.radar-wrap iframe{width:100%;height:100%;border:none;background:#0d1b2a}
-.chart-wrap{flex:none;display:flex;flex-direction:column;gap:2px}
-.chart-label{font-size:10px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.03em}
-.chart-inner{position:relative}
-.chart-inner svg{width:100%;height:50px;background:#131f33;border-radius:8px;display:block}
-.chart-max,.chart-min{position:absolute;right:4px;font-size:9px;color:#7ec8f0;background:rgba(13,27,42,.7);padding:0 3px;border-radius:3px}
-.chart-max{top:2px}
-.chart-min{bottom:2px}
-.chart-xaxis{display:flex;justify-content:space-between;font-size:9px;color:#4a6a8a;margin-top:2px}
-.forecast-days{display:flex;gap:8px;flex:none}
-.fc-day{flex:1;min-width:0;background:#131f33;border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;gap:4px}
-.fc-day-label{font-size:11px;font-weight:700;color:#8aa8c8;text-align:center}
+        $css = <<<'CSS'
+[hidden]{display:none !important}
+.temp-chart{position:relative;margin-top:2px}
+.temp-chart svg{height:46px}
+.chart-max,.chart-min{position:absolute;right:2px;font-size:var(--tk-fs-meta);color:var(--tk-accent);background:rgba(13,27,42,.75);padding:0 3px;border-radius:3px}
+.chart-max{top:0}.chart-min{top:32px}
+.chart-x{display:flex;justify-content:space-between;font-size:var(--tk-fs-meta);color:var(--tk-dim)}
+.sun-times .tk-value{font-size:16px}
+/* Vorhersage: Tageskacheln reihen sich ins Raster ein (display:contents) */
+.fc-wrap{display:contents}
+.fc-day{justify-content:flex-start;gap:4px}
 .fc-halves{display:flex;gap:6px}
-.fc-half{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:1px}
-.fc-half-label{font-size:8px;color:#4a6a8a;text-transform:uppercase;letter-spacing:.02em}
-.fc-half-icon img{width:28px;height:28px}
-.fc-noicon{font-size:18px;color:#4a6a8a}
-.fc-temp{font-size:12px;font-weight:700}
-.fc-desc{font-size:8px;color:#8aa8c8;text-align:center;line-height:1.15}
-</style>
-</head>
-<body>
-<div class="header">
-  <span>🌦 Wetter <span id="updated" class="updated">Stand {$updatedEsc}</span></span>
-</div>
-<div id="warn_tile" class="warn-tile {$warnCls}">⚠️ {$warnTextEsc}</div>
-<div class="current-grid">
-  <div class="cur-tile"><span class="cur-label">Temperatur</span><span id="cur_temp" class="cur-value">{$tempStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Luftfeuchte</span><span id="cur_hum" class="cur-value">{$humStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Helligkeit</span><span id="cur_illum" class="cur-value">{$illumStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Wind</span><span id="cur_wind" class="cur-value">{$windStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Windrichtung</span><span id="cur_winddir" class="cur-value">{$windDirStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Sonnenaufgang</span><span id="cur_sunrise" class="cur-value">{$sunriseEsc}</span></div>
-  <div class="cur-tile"><span class="cur-label">Sonnenuntergang</span><span id="cur_sunset" class="cur-value">{$sunsetEsc}</span></div>
-  <div class="cur-tile"><span class="cur-label">Sonnenschein</span><span id="cur_sun" class="cur-value" style="color:{$sunColor}">{$sunIcon} {$sunLabel}</span></div>
-  <div class="cur-tile"><span class="cur-label">Sonne heute</span><span id="cur_sunshine" class="cur-value">{$sunshineStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Regen</span><span id="cur_rain" class="cur-value" style="color:{$rainColor}">{$rainIcon} {$rainLabel}</span></div>
-  <div class="cur-tile"><span class="cur-label">Regen heute</span><span id="cur_raintoday" class="cur-value">{$rainTodayStr}</span></div>
-  <div class="cur-tile"><span class="cur-label">Pollenflug</span><span id="cur_pollen" class="cur-value cur-value-sm">🌼 {$pollenEsc}</span></div>
-</div>
-{$tempChartBlock}
-{$warnTableBlock}
-<div id="forecast_days" class="forecast-days">{$daysHtml}</div>
-{$radarBlock}
-<script>
-// WebFront injects its own body{margin-top:...;margin-bottom:...} (reserved
-// space for the tile's title/expand-icon overlay). Measure it and size body
-// to exactly fill what's left instead of guessing a fixed pixel value.
-(function() {
-  var cs = getComputedStyle(document.body);
-  var vExtra = (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
-  document.body.style.height = 'calc(100% - ' + vExtra + 'px)';
-})();
-
-var state = {$initJson};
-
-function setText(id, text) {
-  var el = document.getElementById(id);
-  if (el) el.textContent = text;
+.fc-half{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:1px;text-align:center}
+.fc-half img{width:30px;height:30px}
+.fc-noicon{font-size:18px;color:var(--tk-dim)}
+.fc-temp{font-size:var(--tk-fs-text);font-weight:700}
+.fc-desc{line-height:1.15}
+CSS;
+        $js = <<<'JS'
+var lastHtml = { warn_table: state.warnTable, radar: state.radar, forecast: state.forecast };
+function frame(id, html) {
+  if (lastHtml[id] === html) return;
+  lastHtml[id] = html;
+  var f = tk.el(id + '_frame');
+  if (f) f.srcdoc = f.srcdoc.replace(/<\/style>[\s\S]*$/, '</style>') + html;
 }
-
-window.handleMessage = function(raw) {
-  var msg = JSON.parse(raw);
-  if (msg.key !== '__all__') return;
-  var d = msg.value;
-  state = d;
-
-  setText('updated', 'Stand ' + d.updated);
-  setText('cur_temp', d.temp == null ? '–' : d.temp.toFixed(1).replace('.', ',') + ' °C');
-  setText('cur_hum', d.humidity == null ? '–' : Math.round(d.humidity) + '%');
-  setText('cur_illum', d.illumination == null ? '–' : Math.round(d.illumination) + ' lx');
-  setText('cur_wind', d.windSpeed == null ? '–' : d.windSpeed.toFixed(1).replace('.', ',') + ' km/h');
-  setText('cur_sunshine', d.sunshineToday == null ? '–' : (Math.floor(d.sunshineToday/60) + 'h ' + String(Math.round(d.sunshineToday%60)).padStart(2,'0') + 'min'));
-
-  var rainTile = document.getElementById('cur_rain');
-  if (rainTile) {
-    rainTile.style.color = d.rainNow ? '#7ec8f0' : '#4a6a8a';
-    rainTile.textContent = (d.rainNow ? '🌧️ Regnet' : '⛅ Trocken');
-  }
-  var sunTile = document.getElementById('cur_sun');
-  if (sunTile) {
-    sunTile.style.color = d.sunNow ? '#7ee89a' : '#4a6a8a';
-    sunTile.textContent = (d.sunNow ? '☀️ Sonne aktiv' : '☁️ Keine Sonne');
-  }
-  setText('cur_raintoday', d.rainToday == null ? '–' : d.rainToday.toFixed(1).replace('.', ',') + ' mm');
-  setText('cur_sunrise', d.sunrise || '–');
-  setText('cur_sunset', d.sunset || '–');
-  setText('cur_pollen', '🌼 ' + (d.pollen || 'Keine Daten'));
-
-  var warnTile = document.getElementById('warn_tile');
-  if (warnTile) {
-    var cls = {0:'badge-off',1:'badge-yellow',2:'badge-amber',3:'badge-red',4:'badge-violet'}[d.warnLevel] || 'badge-off';
-    warnTile.className = 'warn-tile ' + cls;
-    warnTile.textContent = '⚠️ ' + (d.warnText || 'Keine Warnung');
-  }
-
-  renderTempChart(d.tempHistory);
-};
-
-// Mirrors tempChartData() in PHP so an already-open tile can redraw the
-// sparkline (and its min/max scale labels) without a full reload.
-var CHART_SPAN_SEC = 6 * 3600;
-function renderTempChart(history) {
-  var poly = document.getElementById('temp_chart_poly');
-  if (!poly || !history || history.length < 2) return;
-
-  var startTs = Math.floor(Date.now() / 1000) - CHART_SPAN_SEC;
-  var vals = history.map(function(p) { return p[1]; });
-  var realMin = Math.min.apply(null, vals);
-  var realMax = Math.max.apply(null, vals);
-  var min = realMin, max = realMax;
-  if (max - min < 1.0) {
-    var mid = (max + min) / 2;
-    min = mid - 0.5;
-    max = mid + 0.5;
-  }
-  var pad = (max - min) * 0.15;
-  min -= pad;
-  max += pad;
-
-  var w = 300, h = 70;
-  var pts = history.map(function(p) {
-    var x = Math.max(0, Math.min(w, (p[0] - startTs) / CHART_SPAN_SEC * w));
-    var y = h - ((p[1] - min) / (max - min)) * h;
-    return x.toFixed(1) + ',' + y.toFixed(1);
-  }).join(' ');
-  poly.setAttribute('points', pts);
-  setText('chart_max', realMax.toFixed(1).replace('.', ',') + '°');
-  setText('chart_min', realMin.toFixed(1).replace('.', ',') + '°');
+function status(id, s) {
+  tk.setText(id + '_val', s.text); tk.setText(id + '_icon', s.icon);
+  var el = tk.el(id + '_status'), card = tk.el(id + '_card');
+  if (el) ['ok', 'warn', 'alarm', 'accent'].forEach(function (c) { el.classList.toggle('tk-' + c, c === s.state); });
+  if (card) { card.classList.toggle('tk-is-alarm', s.state === 'alarm'); card.classList.toggle('tk-is-warn', s.state === 'warn'); }
 }
-</script>
-</body>
-</html>
-HTML;
+tk.on('__all__', function (v) {
+  state = v;
+  tk.setText('temp_val', v.temp);
+  var poly = tk.el('temp_poly'); if (poly && v.chart) poly.setAttribute('points', v.chart);
+  tk.setText('chart_max', v.chartMax); tk.setText('chart_min', v.chartMin);
+  tk.setText('hum_val', v.humidity); tk.setText('wind_val', v.wind); tk.setText('wind_sub', v.windDir);
+  tk.setText('illum_val', v.illum); tk.setText('sunshine_val', v.sunshine); tk.setText('rain_today_val', v.rainToday); tk.setText('sun_val', v.sun);
+  status('rain_now', v.rainNow); status('sun_now', v.sunNow); status('pollen', v.pollen); status('warn', v.warn);
+  var w = tk.el('warn_table_wrap'); if (w) w.hidden = v.warnTable === '';
+  frame('warn_table', v.warnTable); frame('radar', v.radar);
+  if (lastHtml.forecast !== v.forecast) { lastHtml.forecast = v.forecast; tk.setHtml('forecast', v.forecast); }
+});
+JS;
+        return $this->tkPage('Wetter', '🌦️', $v['updated'], $body, $css, $js, json_encode($v));
     }
 }
